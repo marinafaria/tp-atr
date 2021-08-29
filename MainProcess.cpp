@@ -66,7 +66,6 @@ HANDLE hOEvent; // Evento que bloqueia/libera a thread de exibição de dados do
 HANDLE hPEvent; // Evento que bloqueia/libera a thread de leitura do PIMS  -> threadReadPIMS
 HANDLE hSEvent; // Evento que bloqueia/libera a thread de leitura do SDCD -> threadReadSDCD
 HANDLE hDataWrittenEvent; // Sinaliza a thread de captura de dados existe dado(s) a ser(em) lido(s)
-
 HANDLE hSDCDTimer; // Temporizador para a geração de mensagens SDCD
 HANDLE hUncriticalAlarmTimer; // Temporizador para a geração de alarmes não críticos do PIMS
 HANDLE hCriticalAlarmTimer; // Temporizador para a geração de alarmes críticos do PIMS
@@ -209,9 +208,7 @@ string getMessage(list <string> message, int type) {
 	string finalMessage;
 	for (it = message.begin(); it != message.end(); ++it) {
 		finalMessage = *it;
-		if (sizeof(finalMessage ) > 6) {
-			if (finalMessage[7] == messageType) break; // CONFERIR SE É 7 OU SE É 6 PARA SABER O TIPO
-		}
+		if (finalMessage[7] == messageType) break;
 	}
 
 	if (it == message.end()) return ""; //Nenhuma mensagem do tipo especificado foi encontrada
@@ -390,6 +387,7 @@ int main()
 	CloseHandle(hOEvent);
 	CloseHandle(hPEvent);
 	CloseHandle(hSEvent);
+	SetEvent(hDataWrittenEvent); // seta o evento caso a  thread esteja precisando para prosseguir com o código
 	CloseHandle(hDataWrittenEvent);
 	CloseHandle(hMutex);
 	CloseHandle(hSDCDTimer);
@@ -463,6 +461,7 @@ DWORD WINAPI threadReadPIMS() {
 	int nEventType;
 	HANDLE timers[2] = { hUncriticalAlarmTimer , hCriticalAlarmTimer };
 	string uncriticalPIMSMessage;
+	BOOL shouldWriteOnList = FALSE;
 
 	LARGE_INTEGER uncriticalTime;
 	uncriticalTime.QuadPart = getUncriticalTime() * (-1);
@@ -489,15 +488,16 @@ DWORD WINAPI threadReadPIMS() {
 				uncriticalTime.QuadPart = getUncriticalTime() * (-1);
 				status = SetWaitableTimer(hUncriticalAlarmTimer, &uncriticalTime, 0, NULL, NULL, 0);
 				if (status == 0) printf("Falha no SetWaitableTimer não crítico, código: (%d)\n", GetLastError());
+				shouldWriteOnList = TRUE;
 			}
 			else if (nTimerType == (WAIT_OBJECT_0 + 1)) {
 				string criticalPIMSmessage = createPIMSMessage(9); // Chama função que cria uma mensagem no formato PIMS critico
 				status = WriteFile(hAlarmFile, criticalPIMSmessage.c_str(), sizeof(char) * (criticalPIMSmessage.length() + 1), &numberOfBytesWritten, NULL);
 				if (status == 0) printf("Falha no WriteFile de alarmes, código: (%d)\n", GetLastError());
-				//printf(criticalPIMSmessage.c_str());
 				uncriticalTime.QuadPart = getCriticalTime() * (-1);
 				status = SetWaitableTimer(hCriticalAlarmTimer, &criticalTime, 0, NULL, NULL, 0);
 				if (status == 0) printf("Falha no SetWaitableTimer crítico, código: (%d)\n", GetLastError());
+				shouldWriteOnList = FALSE;
 			}
 			else {
 				printf("Erro no WaitForMultipleObjects de timers do PIMS! Código: %d\n", GetLastError());
@@ -513,11 +513,11 @@ DWORD WINAPI threadReadPIMS() {
 			statusMutex = ReleaseMutex(hMutex);
 			CheckForError(statusMutex);
 
-			status = WaitForMultipleObjects(2, waitForEvents, FALSE, INFINITE);
+			status = WaitForMultipleObjects(3, waitForEvents, FALSE, INFINITE);
 			CheckForError(status);
 			nEventType = status - WAIT_OBJECT_0;
 			
-			if (nEventType == 1) {
+			if (nEventType == 1 && shouldWriteOnList) {
 				statusMutex = WaitForSingleObject(hMutex, INFINITE);
 				CheckForError(statusMutex == WAIT_OBJECT_0);
 				circularList.push_back(uncriticalPIMSMessage);
@@ -632,7 +632,7 @@ DWORD WINAPI threadGetAlarm() {
 			CheckForError(status);
 			nEventType = status - WAIT_OBJECT_0;
 
-			if (nEventType == 1) {
+			if (nEventType == 1 && WaitForSingleObject(hAEvent, 0) == WAIT_OBJECT_0) {
 
 				// Pega a mensagem da lista circularWaitForSingle
 				statusMutex = WaitForSingleObject(hMutex, INFINITE);
@@ -730,7 +730,3 @@ DWORD WINAPI threadReadKeyboard() {
 	return(0);
 	_endthreadex(0);
 }
-
-
-
-
